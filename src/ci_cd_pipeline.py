@@ -547,7 +547,7 @@ class CICDPipeline:
         for rel_path in ci_files:
             local_path = os.path.join(project_root, rel_path)
             try:
-                with open(local_path, "r") as f:
+                with open(local_path, "r", encoding="utf-8") as f:
                     content = f.read()
             except Exception:
                 status_fn("push", f"⚠ Could not read local {rel_path}, skipping.")
