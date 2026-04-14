@@ -1,0 +1,7 @@
+langchain
+langchain-google-genai
+langgraph
+langchain-community
+python-dotenv
+google-generativeai
+requests

@@ -1,0 +1,14 @@
+# Streamlit UI Requirements
+streamlit>=1.28.0
+
+# Core dependencies (if not already installed)
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# Optional: For enhanced features
+langchain>=0.1.0
+langchain-google-genai>=0.0.6
+google-generativeai>=0.3.0
+
+# For code review features
+dataclasses-json>=0.6.0
