@@ -83,7 +83,6 @@ def clean_gemini_code(response: str) -> str:
 
 _rate_limit_callback = None
 
-
 def set_rate_limit_callback(callback):
     """
     Register a callback that fires when the API hits a rate limit.
@@ -103,7 +102,6 @@ def set_rate_limit_callback(callback):
     global _rate_limit_callback
     _rate_limit_callback = callback
 
-
 def _wait_with_callback(wait_seconds: float, attempt: int, max_retries: int):
     """
     Sleep for wait_seconds. If a UI callback is registered, delegate to it
@@ -116,7 +114,6 @@ def _wait_with_callback(wait_seconds: float, attempt: int, max_retries: int):
         except Exception:
             pass  # callback failed, fall through to plain sleep
     time.sleep(wait_seconds)
-
 
 def _call_gemini_raw(prompt: str, max_retries: int = 5, base_delay: int = 15) -> str:
     """
@@ -136,17 +133,38 @@ def _call_gemini_raw(prompt: str, max_retries: int = 5, base_delay: int = 15) ->
                 prompt,
                 request_options={"timeout": 120},  # 2-minute timeout
             )
-            if hasattr(resp, "text"):
-                return resp.text
+            
+            # resp.text can THROW if the response was blocked by safety filters,
+            # even though hasattr(resp, "text") returns True (it's a property).
+            # We must try/except the actual access.
+            try:
+                text = resp.text
+                if text:
+                    return text
+            except (ValueError, AttributeError):
+                pass
+            
+            # If .text failed or was empty, check for blocked content
+            if hasattr(resp, 'prompt_feedback') and resp.prompt_feedback:
+                print(f"      [!] Gemini blocked the response: {resp.prompt_feedback}")
+            if hasattr(resp, 'candidates') and resp.candidates:
+                for c in resp.candidates:
+                    if hasattr(c, 'finish_reason') and c.finish_reason != 1:  # 1 = STOP (normal)
+                        print(f"      [!] Candidate finish_reason: {c.finish_reason}")
+            
             return str(resp)
             
         except Exception as e:
             error_str = str(e).lower()
             
-            # 1. Invalid API Key Check (Catches 400 and 403 errors)
-            if any(err in error_str for err in ["api key not valid", "api_key_invalid", "project", "denied", "permission", "403"]):
+            # DEBUG: Print the ACTUAL error so we can see what's really going wrong
+            print(f"      [!] Gemini error (attempt {attempt+1}/{actual_retries}): {str(e)[:200]}")
+            
+            # 1. Invalid API Key Check — use SPECIFIC patterns only
+            #    "project" and "permission" are too broad and catch unrelated errors
+            if any(err in error_str for err in ["api key not valid", "api_key_invalid"]):
                 if len(GEMINI_API_KEYS) > 1:
-                    print(f"      [!] Invalid API Key detected at index {current_key_index}. Rotating...")
+                    print(f"      [!] Invalid API Key at index {current_key_index}. Rotating...")
                     current_key_index = (current_key_index + 1) % len(GEMINI_API_KEYS)
                     genai.configure(api_key=GEMINI_API_KEYS[current_key_index])
                     model = genai.GenerativeModel(MODEL_NAME)
@@ -181,8 +199,7 @@ def _call_gemini_raw(prompt: str, max_retries: int = 5, base_delay: int = 15) ->
             else:
                 raise e
     
-    return ""
-
+    raise RuntimeError(f"Gemini API failed after {actual_retries} attempts. Last error was logged above.")
 
 # Builds a request prompt for Gemini; 
     # "Write a Python function according to this request... Returns only Python code"

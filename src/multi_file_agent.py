@@ -66,6 +66,11 @@ class MultiFileAgentV2:
         """
         readme_context = get_readme_context()
         
+        # Truncate context BEFORE building the prompt
+        MAX_CONTEXT_CHARS = 8000
+        if len(readme_context) > MAX_CONTEXT_CHARS:
+            readme_context = readme_context[:MAX_CONTEXT_CHARS] + "\n\n... [truncated for planning] ..."
+        
         planning_prompt = f"""
 You are a senior software architect. Analyze this repository and create a safe implementation plan.
 
@@ -121,30 +126,79 @@ README RULES:
 - Do not push/commit functions to update parts of the README
 - Edit the existing README.md file automatically without the use of another helper function
 
-Return ONLY valid JSON, no markdown.
+CRITICAL: Return ONLY a valid JSON object. No markdown fences, no explanation, no text before or after the JSON.
 """
         
-        try:
-            response = _call_gemini_raw(planning_prompt)
-            plan = self._extract_json(response)
-            
-            # Validate plan
-            validated_plan = self._validate_plan(plan)
-            
-            return validated_plan
-            
-        except Exception as e:
-            print(f"Planning failed: {e}")
-            return self._create_empty_plan(str(e))
+        # Try up to 2 times — second attempt uses a simpler prompt
+        for attempt in range(2):
+            try:
+                if attempt == 1:
+                    # Retry with a much simpler prompt if first attempt failed
+                    print("Retrying planning with simplified prompt...")
+                    planning_prompt = f"""Return ONLY a JSON object (no markdown, no explanation) for this coding task:
+
+"{prompt}"
+
+JSON format:
+{{"summary": "description", "files_to_create": [{{"path": "src/example.py", "purpose": "desc", "dependencies": [], "priority": 1}}], "files_to_edit": [{{"path": "src/existing.py", "changes": "desc", "reason": "desc", "priority": 2}}], "files_to_delete": [], "validation_rules": [], "implementation_order": ["Step 1: ..."], "estimated_complexity": "low"}}
+
+All new source files go in src/. All test files go in tests/. Return ONLY JSON."""
+
+                response = _call_gemini_raw(planning_prompt)
+                
+                # DEBUG: Log raw Gemini response
+                print(f"\n{'='*60}")
+                print(f"DEBUG: Raw Gemini response attempt {attempt+1} ({len(response) if response else 0} chars):")
+                print(f"{'='*60}")
+                print(response[:2000] if response else "<EMPTY RESPONSE>")
+                print(f"{'='*60}\n")
+                
+                plan = self._extract_json(response)
+                validated_plan = self._validate_plan(plan)
+                return validated_plan
+                
+            except Exception as e:
+                print(f"Planning attempt {attempt+1} failed: {e}")
+                if attempt == 1:
+                    return self._create_empty_plan(str(e))
     
     def _extract_json(self, response: str) -> Dict:
-        """Extract JSON from Gemini response"""
+        """Extract JSON from Gemini response, handling markdown fences and bad formatting."""
         import re
         
-        # Try to find JSON block
-        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        text = response.strip()
+        
+        # Step 1: Strip markdown fences if present (```json ... ``` or ``` ... ```)
+        fence_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+        if fence_match:
+            try:
+                return json.loads(fence_match.group(1))
+            except json.JSONDecodeError:
+                pass
+        
+        # Step 2: Find the outermost JSON object by matching balanced braces
+        start = text.find('{')
+        if start != -1:
+            depth = 0
+            for i in range(start, len(text)):
+                if text[i] == '{':
+                    depth += 1
+                elif text[i] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        candidate = text[start:i + 1]
+                        try:
+                            return json.loads(candidate)
+                        except json.JSONDecodeError:
+                            break
+        
+        # Step 3: Last resort — try the greedy regex
+        json_match = re.search(r'\{.*\}', text, re.DOTALL)
         if json_match:
-            return json.loads(json_match.group())
+            try:
+                return json.loads(json_match.group())
+            except json.JSONDecodeError:
+                pass
         
         raise ValueError("No valid JSON found in response")
     

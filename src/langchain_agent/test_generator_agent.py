@@ -242,7 +242,13 @@ class TestGeneratorAgent:
     # ========================================================================
     def _generate_test_file_header(self, file_path: str, imports: List[str]) -> str:
         """Generate test file header with imports"""
-        module_name = file_path.replace('/', '.').replace('.py', '')
+        # Ensure the module path always uses the correct import form
+        # e.g. "src/password_utils.py" → "src.password_utils"
+        #      "password_utils.py"     → "src.password_utils" (assume src/ if no dir)
+        module_name = file_path.replace('/', '.').replace('\\', '.').replace('.py', '')
+        if not module_name.startswith('src.') and not '.' in module_name.split('.')[0]:
+            # Bare filename like "password_utils" — prepend src.
+            module_name = f"src.{module_name}"
         
         header = f'''"""
 Tests for {file_path}
